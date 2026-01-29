@@ -57,7 +57,16 @@ def get_data(start_dt, end_dt):
     
     if not df.empty:
         # Конвертуємо час
+        # 1. Перетворюємо мілісекунди в UTC
         df['datetime'] = pd.to_datetime(df['event_time'], unit='ms', utc=True)
+        
+        # 2. Переводимо в київський час 
+        # Використовуємо 'Europe/Kyiv' 
+        df['datetime'] = df['datetime'].dt.tz_convert('Europe/Kyiv')
+        
+        # 3. Видаляємо інформацію про часовий пояс, щоб Plotly не "плутався" 
+        # (робимо час "наївним", але вже зміщеним на +2/+3 години)
+        df['datetime'] = df['datetime'].dt.tz_localize(None)
         
         # Оскільки ви тепер пишете дані 1/хв, 
         # додаткова фільтрація (resample) тут вже не обов'язкова,
@@ -137,6 +146,7 @@ if not df.empty:
                              file_name=f"pH_report_{start_date}_{end_date}.xlsx")
 else:
     st.info("Даних не знайдено. Спробуйте розширити діапазон.")
+
 
 
 
