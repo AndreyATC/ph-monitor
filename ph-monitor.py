@@ -23,24 +23,48 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 def get_data(start_dt, end_dt):
-    # Перетворюємо datetime в мілісекунди для пошуку в BIGINT
+    # 1. Перетворюємо час у мілісекунди
     start_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000)
     
-    # Запит до Supabase
-    response = supabase.table("ph_logs") \
-        .select("event_time, ph") \
-        .gte("event_time", start_ms) \
-        .lte("event_time", end_ms) \
-        .order("event_time", desc=False) \
-        .limit(20000) \
-        .execute()
+    all_rows = []
+    page_size = 1000  # Розмір порції даних
+    offset = 0        # Зміщення (з якого рядка починати)
     
-    df = pd.DataFrame(response.data)
+    while True:
+        # Запит порції даних від offset до offset + page_size
+        response = supabase.table("ph_logs") \
+            .select("event_time, ph") \
+            .gte("event_time", start_ms) \
+            .lte("event_time", end_ms) \
+            .order("event_time", desc=False) \
+            .range(offset, offset + page_size - 1) \
+            .execute()
+        
+        data = response.data
+        if not data:
+            break
+            
+        all_rows.extend(data)
+        
+        # Якщо отримали менше, ніж просили — значить, дані закінчилися
+        if len(data) < page_size:
+            break
+            
+        offset += page_size
+    
+    df = pd.DataFrame(all_rows)
     
     if not df.empty:
-        # Конвертуємо BIGINT мілісекунди в об'єкти datetime
+        # Конвертуємо час
         df['datetime'] = pd.to_datetime(df['event_time'], unit='ms')
+        
+        # Оскільки ви тепер пишете дані 1/хв, 
+        # додаткова фільтрація (resample) тут вже не обов'язкова,
+        # але для швидкості графіка за великий період можна залишити:
+        if len(df) > 2000:
+            df = df.set_index('datetime').resample('5min').mean().dropna().reset_index()
+            
     return df
 
 # --- БІЧНА ПАНЕЛЬ ---
@@ -113,5 +137,6 @@ if not df.empty:
                              file_name=f"pH_report_{start_date}_{end_date}.xlsx")
 else:
     st.info("Даних не знайдено. Спробуйте розширити діапазон.")
+
 
 
