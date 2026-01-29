@@ -1,14 +1,20 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, time, timedelta
 import io
+from supabase import create_client, Client
 
-# Налаштування сторінки (робимо її широкою і прибираємо зайві відступи)
-st.set_page_config(page_title="pH Monitor", layout="wide", page_icon="🐠")
+# --- ІНІЦІАЛІЗАЦІЯ SUPABASE ---
+# Переконайтеся, що ви додали ці ключі в Secrets на streamlit.io
+url: str = st.secrets["https://tnnpdbprotiytbstdyje.supabase.co"]
+key: str = st.secrets["sb_publishable_0mXRy6ANgh7mb_pqgBBdzg_5bYCK83u"]
+supabase: Client = create_client(url, key)
 
-# Стиль для зменшення відступів зверху
+# Налаштування сторінки
+st.set_page_config(page_title="Aquarium pH Monitor", layout="wide", page_icon="🐠")
+
+# Стиль
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 0rem;}
@@ -17,28 +23,34 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 def get_data(start_dt, end_dt):
-    conn = sqlite3.connect("aquarium.db")
-    query = f"""
-        SELECT datetime_str as datetime, ph 
-        FROM ph_logs 
-        WHERE datetime >= '{start_dt}' AND datetime <= '{end_dt}'
-        ORDER BY event_time ASC
-    """
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    # Перетворюємо datetime в мілісекунди для пошуку в BIGINT
+    start_ms = int(start_dt.timestamp() * 1000)
+    end_ms = int(end_dt.timestamp() * 1000)
+    
+    # Запит до Supabase
+    response = supabase.table("ph_logs") \
+        .select("event_time, ph") \
+        .gte("event_time", start_ms) \
+        .lte("event_time", end_ms) \
+        .order("event_time", desc=False) \
+        .execute()
+    
+    df = pd.DataFrame(response.data)
+    
+    if not df.empty:
+        # Конвертуємо BIGINT мілісекунди в об'єкти datetime
+        df['datetime'] = pd.to_datetime(df['event_time'], unit='ms')
     return df
 
-# --- БІЧНА ПАНЕЛЬ (Керування) ---
+# --- БІЧНА ПАНЕЛЬ ---
 st.sidebar.header("⚙️ Налаштування")
 
-# Вибір інтервалу дат
 d_range = st.sidebar.date_input(
     "Оберіть інтервал дат",
     value=(datetime.now() - timedelta(days=2), datetime.now()),
     max_value=datetime.now()
 )
 
-# Перевірка, чи обрано обидві дати (початок і кінець)
 if isinstance(d_range, tuple) and len(d_range) == 2:
     start_date, end_date = d_range
 else:
@@ -55,9 +67,7 @@ end_dt = datetime.combine(end_date, end_t)
 df = get_data(start_dt, end_dt)
 
 if not df.empty:
-    df['datetime'] = pd.to_datetime(df['datetime'])
-    
-    # Компактна статистика в один рядок зверху
+    # Статистика
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Середній pH", f"{df['ph'].mean():.2f}")
     m2.metric("Максимум", f"{df['ph'].max():.2f}")
@@ -67,26 +77,24 @@ if not df.empty:
     # Побудова графіка
     fig = go.Figure()
 
-    # Основна лінія
     fig.add_trace(go.Scatter(
         x=df['datetime'], y=df['ph'],
         mode='lines',
         line=dict(color='#007acc', width=2),
         fill='tozeroy',
         fillcolor='rgba(0, 122, 204, 0.05)',
-        name="Поточний pH"
+        name="pH"
     ))
 
-    # Додаємо критичні зони (червоні лінії)
-    fig.add_hline(y=8.3, line_dash="dot", line_color="red", annotation_text="Критично високий")
-    fig.add_hline(y=7.8, line_dash="dot", line_color="red", annotation_text="Критично низький")
-    # Оптимальна зона (зелена)
+    # Межі
+    fig.add_hline(y=8.3, line_dash="dot", line_color="red", annotation_text="Високий")
+    fig.add_hline(y=7.8, line_dash="dot", line_color="red", annotation_text="Низький")
     fig.add_hrect(y0=7.9, y1=8.2, line_width=0, fillcolor="green", opacity=0.05, annotation_text="Оптимально")
 
     fig.update_layout(
         height=700,
         margin=dict(l=20, r=20, t=10, b=20),
-        yaxis=dict(range=[7.7, 8.5], title="pH"),
+        yaxis=dict(range=[7.6, 8.6], title="pH"),
         xaxis_title=None,
         hovermode="x unified",
         template="plotly_white"
@@ -94,7 +102,7 @@ if not df.empty:
     
     st.plotly_chart(fig, use_container_width=True)
 
-    # Експорт у бічній панелі
+    # Експорт
     st.sidebar.markdown("---")
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
@@ -103,4 +111,4 @@ if not df.empty:
     st.sidebar.download_button("📥 Завантажити Excel", buffer.getvalue(), 
                              file_name=f"pH_report_{start_date}_{end_date}.xlsx")
 else:
-    st.info("Оберіть інший діапазон. Даних не знайдено.")
+    st.info("Даних не знайдено. Спробуйте розширити діапазон.")
