@@ -7,8 +7,8 @@ from supabase import create_client, Client
 
 # --- ІНІЦІАЛІЗАЦІЯ SUPABASE ---
 # Переконайтеся, що ви додали ці ключі в Secrets на streamlit.io
-url: str = st.secrets["https://tnnpdbprotiytbstdyje.supabase.co"]
-key: str = st.secrets["sb_publishable_0mXRy6ANgh7mb_pqgBBdzg_5bYCK83u"]
+url: str = st.secrets["SUPABASE_URL"]
+key: str = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(url, key)
 
 # Налаштування сторінки
@@ -112,3 +112,4 @@ if not df.empty:
                              file_name=f"pH_report_{start_date}_{end_date}.xlsx")
 else:
     st.info("Даних не знайдено. Спробуйте розширити діапазон.")
+
