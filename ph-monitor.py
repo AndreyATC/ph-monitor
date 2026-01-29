@@ -33,6 +33,7 @@ def get_data(start_dt, end_dt):
         .gte("event_time", start_ms) \
         .lte("event_time", end_ms) \
         .order("event_time", desc=False) \
+        .limit(20000) \
         .execute()
     
     df = pd.DataFrame(response.data)
@@ -112,4 +113,5 @@ if not df.empty:
                              file_name=f"pH_report_{start_date}_{end_date}.xlsx")
 else:
     st.info("Даних не знайдено. Спробуйте розширити діапазон.")
+
 
