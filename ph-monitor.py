@@ -57,7 +57,7 @@ def get_data(start_dt, end_dt):
     
     if not df.empty:
         # Конвертуємо час
-        df['datetime'] = pd.to_datetime(df['event_time'], unit='ms')
+        df['datetime'] = pd.to_datetime(df['event_time'], unit='ms', utc=True)
         
         # Оскільки ви тепер пишете дані 1/хв, 
         # додаткова фільтрація (resample) тут вже не обов'язкова,
@@ -137,6 +137,7 @@ if not df.empty:
                              file_name=f"pH_report_{start_date}_{end_date}.xlsx")
 else:
     st.info("Даних не знайдено. Спробуйте розширити діапазон.")
+
 
 
 
