@@ -12,7 +12,11 @@ key: str = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(url, key)
 
 # Налаштування сторінки
-st.set_page_config(page_title="Aquarium pH Monitor", layout="wide", page_icon="🐠")
+st.set_page_config(
+    page_title="Aquarium Monitor",
+    layout="wide",  # Дозволяє використовувати всю ширину екрана
+    initial_sidebar_state="collapsed"  # Сховує бокове меню на мобільних, щоб не заважало
+)
 
 # Стиль
 st.markdown("""
@@ -102,11 +106,25 @@ df = get_data(start_dt, end_dt)
 
 if not df.empty:
     # Статистика
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Середній pH", f"{df['ph'].mean():.2f}")
-    m2.metric("Максимум", f"{df['ph'].max():.2f}")
-    m3.metric("Мінімум", f"{df['ph'].min():.2f}")
-    m4.metric("Точок", len(df))
+    # 1. Вставляємо CSS-стиль
+    st.markdown("""
+        <style>
+        /* Медіа-запит для мобільних пристроїв */
+        @media (max-width: 767px) {
+            .mobile-hide {
+                display: none !important;
+            }
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+    
+    
+    #m1, m2, m3, m4 = st.columns(4)
+    #m1.metric("Середній pH", f"{df['ph'].mean():.2f}")
+    #m2.metric("Максимум", f"{df['ph'].max():.2f}")
+    #m3.metric("Мінімум", f"{df['ph'].min():.2f}")
+    #m4.metric("Точок", len(df))
 
     # Побудова графіка
     fig = go.Figure()
@@ -126,6 +144,7 @@ if not df.empty:
     fig.add_hrect(y0=7.9, y1=8.2, line_width=0, fillcolor="green", opacity=0.05, annotation_text="Оптимально")
 
     fig.update_layout(
+        showlegend=False,
         height=700,
         margin=dict(l=20, r=20, t=10, b=20),
         yaxis=dict(range=[7.6, 8.6], title="pH"),
@@ -134,8 +153,29 @@ if not df.empty:
         template="plotly_white"
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    # Налаштування конфігурації
+    config = {
+        'displayModeBar': True,  # Завжди показувати панель
+        'scrollZoom': True,      # Дозволити зум коліщатком миші
+        'modeBarButtonsToRemove': ['lasso2d', 'select2d'], # Можна прибрати зайві кнопки
+        'displaylogo': False     # Прибрати логотип Plotly
+    }
 
+    # Відображення графіка з цим конфігом
+    st.plotly_chart(fig, use_container_width=True, config=config)
+
+    # 2. Використовуємо контейнер для статистики
+    with st.container():
+        # Додаємо HTML-мітку для всього блоку
+        st.markdown('<div class="mobile-hide">', unsafe_allow_html=True)
+    
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Середній pH", f"{df['ph'].mean():.2f}")
+        col2.metric("Максимум", f"{df['ph'].max():.2f}")
+        col3.metric("Мінімум", f"{df['ph'].min():.2f}")
+    
+        st.markdown('</div>', unsafe_allow_html=True)
+    
     # Експорт
     st.sidebar.markdown("---")
     buffer = io.BytesIO()
