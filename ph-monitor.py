@@ -169,10 +169,11 @@ if not df.empty:
         # Додаємо HTML-мітку для всього блоку
         st.markdown('<div class="mobile-hide">', unsafe_allow_html=True)
     
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         col1.metric("Середній pH", f"{df['ph'].mean():.2f}")
         col2.metric("Максимум", f"{df['ph'].max():.2f}")
         col3.metric("Мінімум", f"{df['ph'].min():.2f}")
+        col4.metric("Точок", len(df))
     
         st.markdown('</div>', unsafe_allow_html=True)
     
@@ -186,6 +187,7 @@ if not df.empty:
                              file_name=f"pH_report_{start_date}_{end_date}.xlsx")
 else:
     st.info("Даних не знайдено. Спробуйте розширити діапазон.")
+
 
 
 
