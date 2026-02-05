@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots  # Потрібно для подвійної осі
 from datetime import datetime, time, timedelta
 import io
 from supabase import create_client, Client
 
 # --- ІНІЦІАЛІЗАЦІЯ SUPABASE ---
-# Переконайтеся, що ви додали ці ключі в Secrets на streamlit.io
 url: str = st.secrets["SUPABASE_URL"]
 key: str = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(url, key)
@@ -14,8 +14,8 @@ supabase: Client = create_client(url, key)
 # Налаштування сторінки
 st.set_page_config(
     page_title="Aquarium Monitor",
-    layout="wide",  # Дозволяє використовувати всю ширину екрана
-    initial_sidebar_state="collapsed"  # Сховує бокове меню на мобільних, щоб не заважало
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 # Стиль
@@ -26,19 +26,15 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-def get_data(start_dt, end_dt):
-    # 1. Перетворюємо час у мілісекунди
-    start_ms = int(start_dt.timestamp() * 1000)
-    end_ms = int(end_dt.timestamp() * 1000)
-    
+# Функція для завантаження з конкретної таблиці
+def fetch_table_data(table_name, column_name, start_ms, end_ms):
     all_rows = []
-    page_size = 1000  # Розмір порції даних
-    offset = 0        # Зміщення (з якого рядка починати)
+    page_size = 1000
+    offset = 0
     
     while True:
-        # Запит порції даних від offset до offset + page_size
-        response = supabase.table("ph_logs") \
-            .select("event_time, ph") \
+        response = supabase.table(table_name) \
+            .select(f"event_time, {column_name}") \
             .gte("event_time", start_ms) \
             .lte("event_time", end_ms) \
             .order("event_time", desc=False) \
@@ -50,35 +46,58 @@ def get_data(start_dt, end_dt):
             break
             
         all_rows.extend(data)
-        
-        # Якщо отримали менше, ніж просили — значить, дані закінчилися
         if len(data) < page_size:
             break
-            
         offset += page_size
+        
+    return pd.DataFrame(all_rows)
+
+def get_combined_data(start_dt, end_dt):
+    # Перетворюємо час у мілісекунди
+    start_ms = int(start_dt.timestamp() * 1000)
+    end_ms = int(end_dt.timestamp() * 1000)
     
-    df = pd.DataFrame(all_rows)
+    # 1. Завантажуємо pH
+    df_ph = fetch_table_data("ph_logs", "ph", start_ms, end_ms)
     
-    if not df.empty:
-        # Конвертуємо час
-        # 1. Перетворюємо мілісекунди в UTC
-        df['datetime'] = pd.to_datetime(df['event_time'], unit='ms', utc=True)
-        
-        # 2. Переводимо в київський час 
-        # Використовуємо 'Europe/Kyiv' 
-        df['datetime'] = df['datetime'].dt.tz_convert('Europe/Kyiv')
-        
-        # 3. Видаляємо інформацію про часовий пояс, щоб Plotly не "плутався" 
-        # (робимо час "наївним", але вже зміщеним на +2/+3 години)
-        df['datetime'] = df['datetime'].dt.tz_localize(None)
-        
-        # Оскільки ви тепер пишете дані 1/хв, 
-        # додаткова фільтрація (resample) тут вже не обов'язкова,
-        # але для швидкості графіка за великий період можна залишити:
-        if len(df) > 2000:
-            df = df.set_index('datetime').resample('5min').mean().dropna().reset_index()
-            
-    return df
+    # 2. Завантажуємо ORP
+    df_orp = fetch_table_data("orp_logs", "orp", start_ms, end_ms)
+    
+    # Якщо даних немає взагалі
+    if df_ph.empty and df_orp.empty:
+        return pd.DataFrame()
+
+    # Обробка pH
+    if not df_ph.empty:
+        df_ph['datetime'] = pd.to_datetime(df_ph['event_time'], unit='ms', utc=True)
+        df_ph = df_ph.set_index('datetime')[['ph']]
+    
+    # Обробка ORP
+    if not df_orp.empty:
+        df_orp['datetime'] = pd.to_datetime(df_orp['event_time'], unit='ms', utc=True)
+        df_orp = df_orp.set_index('datetime')[['orp']]
+
+    # 3. Об'єднання (Merge) по часу
+    # Використовуємо outer join, щоб зберегти дані, навіть якщо час не ідеально збігається
+    if not df_ph.empty and not df_orp.empty:
+        # Об'єднуємо і сортуємо
+        df_combined = pd.concat([df_ph, df_orp], axis=1).sort_index()
+    elif not df_ph.empty:
+        df_combined = df_ph
+        df_combined['orp'] = None # Додаємо пусту колонку
+    else:
+        df_combined = df_orp
+        df_combined['ph'] = None
+
+    # Конвертація часового поясу (Kyiv)
+    df_combined.index = df_combined.index.tz_convert('Europe/Kyiv').tz_localize(None)
+    
+    # 4. Ресемплінг (усереднення) до 5 хвилин
+    # Це вирівняє дані pH та ORP на одну часову шкалу і прибере шуми
+    df_resampled = df_combined.resample('5min').mean()
+    
+    # Повертаємо index назад у колонку datetime
+    return df_resampled.reset_index()
 
 # --- БІЧНА ПАНЕЛЬ ---
 st.sidebar.header("⚙️ Налаштування")
@@ -102,94 +121,99 @@ start_dt = datetime.combine(start_date, start_t)
 end_dt = datetime.combine(end_date, end_t)
 
 # --- ОСНОВНИЙ БЛОК ---
-df = get_data(start_dt, end_dt)
+df = get_combined_data(start_dt, end_dt)
 
 if not df.empty:
-    # Статистика
-    # 1. Вставляємо CSS-стиль
     st.markdown("""
         <style>
-        /* Медіа-запит для мобільних пристроїв */
         @media (max-width: 767px) {
-            .mobile-hide {
-                display: none !important;
-            }
+            .mobile-hide { display: none !important; }
         }
         </style>
         """, unsafe_allow_html=True)
 
-    
-    
-    #m1, m2, m3, m4 = st.columns(4)
-    #m1.metric("Середній pH", f"{df['ph'].mean():.2f}")
-    #m2.metric("Максимум", f"{df['ph'].max():.2f}")
-    #m3.metric("Мінімум", f"{df['ph'].min():.2f}")
-    #m4.metric("Точок", len(df))
+    # --- ГРАФІК З ДВОМА ОСЯМИ ---
+    # Створюємо фігуру з додатковою віссю Y
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # Побудова графіка
-    fig = go.Figure()
-
+    # Лінія pH (Ліва вісь)
     fig.add_trace(go.Scatter(
         x=df['datetime'], y=df['ph'],
         mode='lines',
+        name="pH",
         line=dict(color='#007acc', width=2),
-        fill='tozeroy',
-        fillcolor='rgba(0, 122, 204, 0.05)',
-        name="pH"
-    ))
+        connectgaps=True # З'єднувати лінії, якщо є пропуски
+    ), secondary_y=False)
 
-    # Межі
-    fig.add_hline(y=8.3, line_dash="dot", line_color="red", annotation_text="Високий")
-    fig.add_hline(y=7.8, line_dash="dot", line_color="red", annotation_text="Низький")
-    fig.add_hrect(y0=7.9, y1=8.2, line_width=0, fillcolor="green", opacity=0.05, annotation_text="Оптимально")
+    # Лінія ORP (Права вісь)
+    fig.add_trace(go.Scatter(
+        x=df['datetime'], y=df['orp'],
+        mode='lines',
+        name="ORP (mV)",
+        line=dict(color='#ff7f0e', width=2), # Помаранчевий колір
+        connectgaps=True
+    ), secondary_y=True)
 
+    # Межі для pH
+    fig.add_hline(y=8.3, line_dash="dot", line_color="blue", opacity=0.3, annotation_text="pH High", secondary_y=False)
+    fig.add_hline(y=7.8, line_dash="dot", line_color="blue", opacity=0.3, annotation_text="pH Low", secondary_y=False)
+
+    # Налаштування макету
     fig.update_layout(
-        showlegend=False,
-        height=700,
-        margin=dict(l=20, r=20, t=10, b=20),
-        yaxis=dict(range=[7.6, 8.6], title="pH"),
-        xaxis_title=None,
+        title="Динаміка pH та ORP",
+        height=600,
         hovermode="x unified",
-        template="plotly_white"
+        template="plotly_white",
+        legend=dict(orientation="h", y=1.1, x=0.5, xanchor='center'),
+        margin=dict(l=20, r=20, t=50, b=20)
     )
-    
-    # Налаштування конфігурації
+
+    # Налаштування осей
+    fig.update_yaxes(title_text="<b>pH</b>", color="#007acc", secondary_y=False, range=[7.0, 9.0])
+    fig.update_yaxes(title_text="<b>ORP (mV)</b>", color="#ff7f0e", secondary_y=True, range=[100, 500]) # Підлаштуйте діапазон під свій акваріум
+
+    # Конфігурація для мобільних
     config = {
-        'displayModeBar': True,  # Завжди показувати панель
-        'scrollZoom': True,      # Дозволити зум коліщатком миші
-        'modeBarButtonsToRemove': ['lasso2d', 'select2d'], # Можна прибрати зайві кнопки
-        'displaylogo': False     # Прибрати логотип Plotly
+        'displayModeBar': True,
+        'scrollZoom': True,
+        'displaylogo': False,
+        'modeBarButtonsToRemove': ['lasso2d', 'select2d']
     }
 
-    # Відображення графіка з цим конфігом
     st.plotly_chart(fig, use_container_width=True, config=config)
 
-    # 2. Використовуємо контейнер для статистики
+    # --- СТАТИСТИКА (pH та ORP) ---
     with st.container():
-        # Додаємо HTML-мітку для всього блоку
-        st.markdown('<div class="mobile-hide">', unsafe_allow_html=True)
-    
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Середній pH", f"{df['ph'].mean():.2f}")
-        col2.metric("Максимум", f"{df['ph'].max():.2f}")
-        col3.metric("Мінімум", f"{df['ph'].min():.2f}")
-        col4.metric("Точок", len(df))
-    
-        st.markdown('</div>', unsafe_allow_html=True)
-    
+        st.markdown("### Статистика за період")
+        
+        # Рядок 1: pH
+        st.markdown("**Водневий показник (pH)**")
+        c1, c2, c3, c4 = st.columns(4)
+        if 'ph' in df and df['ph'].notnull().any():
+            c1.metric("Середній", f"{df['ph'].mean():.2f}")
+            c2.metric("Макс", f"{df['ph'].max():.2f}")
+            c3.metric("Мін", f"{df['ph'].min():.2f}")
+            c4.metric("Останній", f"{df['ph'].iloc[-1]:.2f}")
+        
+        st.divider()
+        
+        # Рядок 2: ORP
+        st.markdown("**Редокс-потенціал (ORP)**")
+        k1, k2, k3, k4 = st.columns(4)
+        if 'orp' in df and df['orp'].notnull().any():
+            k1.metric("Середній", f"{df['orp'].mean():.0f} mV")
+            k2.metric("Макс", f"{df['orp'].max():.0f} mV")
+            k3.metric("Мін", f"{df['orp'].min():.0f} mV")
+            k4.metric("Останній", f"{df['orp'].iloc[-1]:.0f} mV")
+
     # Експорт
     st.sidebar.markdown("---")
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False)
+        df.to_excel(writer, index=True)
     
     st.sidebar.download_button("📥 Завантажити Excel", buffer.getvalue(), 
-                             file_name=f"pH_report_{start_date}_{end_date}.xlsx")
+                             file_name=f"Aquarium_Report_{start_date}.xlsx")
+
 else:
-    st.info("Даних не знайдено. Спробуйте розширити діапазон.")
-
-
-
-
-
-
+    st.info("Даних не знайдено. Перевірте підключення або розширте діапазон дат.")
