@@ -169,7 +169,7 @@ if not df.empty:
     )
 
     # Налаштування осей
-    fig.update_yaxes(title_text="<b>pH</b>", color="#007acc", secondary_y=False, range=[7.0, 9.0])
+    fig.update_yaxes(title_text="<b>pH</b>", color="#007acc", secondary_y=False, range=[7.5, 8.5])
     fig.update_yaxes(title_text="<b>ORP (mV)</b>", color="#ff7f0e", secondary_y=True, range=[200, 400]) # Підлаштуйте діапазон під свій акваріум
 
     # Конфігурація для мобільних
@@ -217,4 +217,5 @@ if not df.empty:
 
 else:
     st.info("Даних не знайдено. Перевірте підключення або розширте діапазон дат.")
+
 
